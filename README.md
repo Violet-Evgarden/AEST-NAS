@@ -1,34 +1,42 @@
 # 🚀 AEST-NAS
-**Agentic Evolution Meets Semantic Tribunal: A Self-Designing Dual-Phase Framework for Neural Architecture Search**
+**Agentic Evolution Meets Semantic Tribunal: A Meta-Prompted Dual-Phase Framework for Neural Architecture Search**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![arXiv](https://img.shields.io/badge/arXiv-Paper_Title-b31b1b.svg)](https://arxiv.org/abs/xxxx.xxxxx)
 
 > This is the official PyTorch implementation of **AEST-NAS**. 
-## 📖 Introduction
-Traditional Zero-Cost Neural Architecture Search (NAS) often suffers from the **"Proxy Gap"** and **"Skip-Connect Collapse"**, where proxy metrics yield false-positive high scores for degenerate architectures. 
 
-**AEST-NAS** introduces a novel self-designing dual-phase framework to conquer this. By leveraging a **Meta-LLM** to autonomously extract physical topological rules, our framework eliminates human-engineered prompts. It seamlessly integrates a fast **Agentic Evolution (Phase 1)** for broad exploration with a rigorous **Semantic Tribunal (Phase 2)** for zero-shot, proxy-free structural evaluation.
+## 📖 Introduction
+While Zero-Cost (ZC) proxies exponentially accelerate Neural Architecture Search (NAS), they frequently exhibit severe mathematical biases, artificially elevating structurally pathological architectures (e.g., severe capacity deficits or degenerate connectivity). 
+
+**AEST-NAS** introduces a novel meta-prompted dual-phase framework to decouple search efficiency from proxy biases. By leveraging a **Meta-Prompt Synthesizer** to autonomously translate universal structural heuristics into space-specific directives, our framework enables an efficient **Agentic Evolution (Phase 1)** guided by black-box ZC metrics, seamlessly safeguarded by a **Semantic Tribunal (Phase 2)** that performs domain-aware semantic filtering.
 
 ## 🌟 Key Features
-- 🤖 **Self-Designing Meta-Agent:** Automatically generates architectural rules, semantic priors, and evaluation prompts directly from the search space definitions.
-- 🧬 **Phase 1 - Agentic Evolution:** A dynamic swarm search loop powered by LLM reflection, utilizing both Long-term (historical failed attempts) and Short-term (peer reference) memory.
-- ⚖️ **Phase 2 - Semantic Tribunal:** A strict LLM judge that evaluates elite candidates *purely based on structural physics and topological semantics*, effectively rejecting false-positive architectures without relying on numerical proxy scores.
+- 🤖 **Meta-Prompt Synthesizer:** Autonomously translates well-established structural heuristics (e.g., Path Connectivity, Representational Density) into explicit, space-specific directives, eliminating the need for manual prompt engineering across different search spaces.
+- 🧬 **Phase 1 - Agentic Evolution:** An LLM-driven mutator agent that explores topologies using purely black-box fitness metrics. It utilizes a stateless, short-term duplicate-aware feedback mechanism to prevent context pollution and topological hallucinations.
+- ⚖️ **Phase 2 - Semantic Tribunal:** A strict structural adjudicator grounded in the **Semantic Structural Prior**. It evaluates the top-$K$ elite candidates to systematically filter out pathological outliers that exploit mathematical proxy formulations, selecting the most robust architecture for deployment.
+- ⚡ **Extreme Efficiency & Low Cost:** Discovers highly compact optimal architectures (e.g., 19.7% Top-1 error on ImageNet under 600M FLOPs) with an end-to-end search cost of only **0.2 GPU days** and an API expenditure ranging from **$0.34 to $0.97**.
+
+## 📊 Main Results
+AEST-NAS achieves state-of-the-art Pareto-optimal trade-offs between accuracy and search efficiency across multiple search spaces:
+- **NAS-Bench-201:** 94.29% Test Acc (CIFAR-10) | 73.32% Test Acc (CIFAR-100)
+- **DARTS Space:** 2.40% Error (CIFAR-10) | 16.88% Error (CIFAR-100)
+- **MobileNet Space (ImageNet):** 19.7% Top-1 Error (600M FLOPs constraint)
 
 ## 🏛️ Architecture
 ![AEST-NAS Architecture](docs/architecture.png)
-*(Please ensure the image is placed in the `docs/` folder or update this path)*
+*(Note: System workflow detailing the Meta-Prompt Synthesizer and the Dual-Phase Search Loop)*
 
 ## 📰 News & Updates
-- **[2026.04]** 🚀 Repository created. Training and Search code will be released soon!
-- **[2026.XX]** 📄 Paper submitted to [Target Conference].
+- **[2026.05]** 📄 Paper submitted to Expert Systems with Applications (ESWA).
+- **[2026.04]** 🚀 Repository created. Search and training codes are progressively being open-sourced.
 
 ## ⚙️ Installation
 
 ```bash
 # Clone the repository
 git clone [https://github.com/Violet-Evgarden/AEST-NAS.git](https://github.com/Violet-Evgarden/AEST-NAS.git)
-cd ASTRA-NAS
+cd AEST-NAS
 
 # Create a conda environment
 conda create -n aest-nas python=3.9
