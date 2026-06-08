@@ -33,14 +33,39 @@ AEST-NAS achieves state-of-the-art Pareto-optimal trade-offs between accuracy an
 
 ## ⚙️ Installation
 
+**Step 1: Environment Setup**
+We recommend using Conda to create a clean virtual environment for AEST-NAS.
+
 ```bash
 # Clone the repository
-git clone [https://github.com/Violet-Evgarden/AEST-NAS.git](https://github.com/Violet-Evgarden/AEST-NAS.git)
+git clone https://github.com/Violet-Evgarden/AEST-NAS.git
 cd AEST-NAS
 
-# Create a conda environment
+# Create and activate a conda environment
 conda create -n aest-nas python=3.9
 conda activate aest-nas
+```
 
-# Install dependencies
+**Step 2: Install Basic Dependencies**
+Install the standard scientific and auxiliary libraries required for the project:
+
+```bash
 pip install -r requirements.txt
+```
+
+**Step 3: Install PyTorch**
+Please install PyTorch, TorchVision, and TorchAudio according to your specific hardware configuration. 
+*Note: Our experiments were conducted using NVIDIA RTX 4090 GPUs. If you are using a similar setup with CUDA 12.1, you can install PyTorch using the following command:*
+
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+For other CUDA versions or CPU-only installations, please refer to the [PyTorch Official Website](https://pytorch.org/get-started/locally/).
+
+**Step 4: Install Architecture Search APIs (NAS-Bench-201 & xautodl)**
+To properly load the search space and evaluate the network architectures, you need to install the official NAS-Bench-201 API and the `xautodl` library. Please install them directly from their source repositories:
+
+```bash
+pip install git+https://github.com/D-X-Y/NAS-Bench-201.git
+pip install git+https://github.com/D-X-Y/xautodl.git
+```
