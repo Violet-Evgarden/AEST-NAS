@@ -1,0 +1,18 @@
+# Basic Scientific Computing & Utilities
+numpy==2.0.2
+scipy==1.13.1
+pandas==2.3.3
+matplotlib==3.9.4
+Pillow==11.3.0
+PyYAML==6.0.3
+tqdm==4.67.3
+networkx==3.2.1
+
+# Large Language Model API
+openai==2.29.0
+
+# Deep Learning Auxiliary Components
+fvcore
+iopath
+yacs
+thop
