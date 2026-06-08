@@ -38,7 +38,7 @@ We recommend using Conda to create a clean virtual environment for AEST-NAS.
 
 ```bash
 # Clone the repository
-git clone https://github.com/Violet-Evgarden/AEST-NAS.git
+git clone [https://github.com/Violet-Evgarden/AEST-NAS.git](https://github.com/Violet-Evgarden/AEST-NAS.git)
 cd AEST-NAS
 
 # Create and activate a conda environment
@@ -55,17 +55,17 @@ pip install -r requirements.txt
 
 **Step 3: Install PyTorch**
 Please install PyTorch, TorchVision, and TorchAudio according to your specific hardware configuration. 
-*Note: Our experiments were conducted using NVIDIA RTX 4090 GPUs. If you are using a similar setup with CUDA 12.1, you can install PyTorch using the following command:*
+*Note: Our experiments were conducted using **PyTorch 2.5.1** with **CUDA 12.1**. You can install this specific version using the following command:*
 
 ```bash
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url [https://download.pytorch.org/whl/cu121](https://download.pytorch.org/whl/cu121)
 ```
 For other CUDA versions or CPU-only installations, please refer to the [PyTorch Official Website](https://pytorch.org/get-started/locally/).
 
-**Step 4: Install Architecture Search APIs (NAS-Bench-201 & xautodl)**
-To properly load the search space and evaluate the network architectures, you need to install the official NAS-Bench-201 API and the `xautodl` library. Please install them directly from their source repositories:
+**Step 4: Install Architecture Search APIs (NAS-Bench-201)**
+To properly load the NAS-Bench-201 search space and evaluate the network architectures, you need to install the official API along with its foundational toolkit `xautodl`. Please install them directly from their source repositories:
 
 ```bash
-pip install git+https://github.com/D-X-Y/NAS-Bench-201.git
-pip install git+https://github.com/D-X-Y/xautodl.git
+pip install git+[https://github.com/D-X-Y/NAS-Bench-201.git](https://github.com/D-X-Y/NAS-Bench-201.git)
+pip install git+[https://github.com/D-X-Y/xautodl.git](https://github.com/D-X-Y/xautodl.git)
 ```
