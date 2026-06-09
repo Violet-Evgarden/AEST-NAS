@@ -69,3 +69,19 @@ To properly load the NAS-Bench-201 search space and evaluate the network archite
 pip install git+[https://github.com/D-X-Y/NAS-Bench-201.git](https://github.com/D-X-Y/NAS-Bench-201.git)
 pip install git+[https://github.com/D-X-Y/xautodl.git](https://github.com/D-X-Y/xautodl.git)
 ```
+
+## 📁 Repository Structure & Usage Notes
+
+Below is a brief overview of the key scripts and directories in this repository:
+
+- **`Agentic_NAS201.py`**: The core script for running our proposed dual-phase search experiments on the NAS-Bench-201 space across three datasets. The methodology can be naturally extended to the DARTS space by replacing the architecture representation format accordingly.
+- **`evolution_search.py`**: Implements the architecture search within the MobileNet macro-search space. Note that this script only performs the search phase. To obtain the true accuracy of the discovered architectures, please use the corresponding training scripts (e.g., `train_*.py`) to train them from scratch.
+- **`evolution_201.py`**: An early-stage exploratory script not directly related to the final AEST-NAS framework proposed in our paper. It attempts to eliminate proxy biases purely through mathematical and human-empirical heuristics. Although the outcomes were sub-optimal, we retain it here for its potential reference value to the community.
+- **`test_proxy_batch.py`**: Scripts dedicated to ablation studies and retrospective evaluations of our searched architectures.
+- **`prompt/`**: A directory containing our generated prompt templates. Researchers can directly utilize these templates or flexibly adapt them to work with other preferred LLM APIs.
+- **Other files**: The remaining files are mostly standard foundational components and utilities for Neural Architecture Search (NAS).
+
+### 📌 Important Notices
+- **Environment & Paths:** Please ensure that all local paths for datasets, API keys, and pre-trained models are correctly updated to match your local environment before execution.
+- **Downloads:** Required datasets and benchmark databases (e.g., the NAS-Bench-201 `.pth` file) are not included in this repository. Please download them from their respective official websites.
+- **Code Readability:** The codebase retains certain legacy comments and internal debugging blocks intended for our team's retrospective checks. These do not affect the main execution logic and can be safely ignored.
