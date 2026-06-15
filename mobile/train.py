@@ -19,13 +19,11 @@ from torchvision.transforms.functional import InterpolationMode
 from transforms import get_mixup_cutmix
 
 
-# --- 1. 自定义 Dataset 类 ---
 class ImageNet64NPZ(Dataset):
     def __init__(self, root, split='train', transform=None):
         self.transform = transform
         self.data = []
         self.targets = []
-        # 必须定义 classes 属性，否则 main 函数会报错
         self.classes = [str(i) for i in range(1000)]
 
         if split == 'train':
@@ -35,24 +33,23 @@ class ImageNet64NPZ(Dataset):
                 if os.path.exists(file_path):
                     entry = np.load(file_path)
                     self.data.append(entry['data'])
-                    # 标签减1，将 1-1000 转为 0-999
                     self.targets.extend(entry['labels'] - 1)
                 else:
                     print(f"警告: 找不到文件 {file_path}")
 
             if not self.data:
-                raise FileNotFoundError(f"在 {root} 下没找到任何训练 npz 文件！")
+                raise FileNotFoundError(f"！")
 
             self.data = np.vstack(self.data).reshape(-1, 3, 64, 64).transpose((0, 2, 3, 1))
         else:
-            print(f"正在加载验证集，路径: {root}")
+            print(f": {root}")
             file_path = os.path.join(root, 'val_data.npz')
             if not os.path.exists(file_path):
-                # 尝试不带后缀的情况
+
                 file_path = os.path.join(root, 'val_data')
 
             if not os.path.exists(file_path):
-                raise FileNotFoundError(f"找不到验证集文件: {file_path}")
+                raise FileNotFoundError(f": {file_path}")
 
             entry = np.load(file_path)
             self.data = entry['data'].reshape(-1, 3, 64, 64).transpose((0, 2, 3, 1))
@@ -69,7 +66,6 @@ class ImageNet64NPZ(Dataset):
         return img, int(target)
 
 
-# --- 2. 训练与评估函数 (保持原样) ---
 def train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args, model_ema=None, scaler=None):
     model.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -145,7 +141,6 @@ def _get_cache_path(filepath):
     return cache_path
 
 
-# --- 3. 数据加载核心逻辑 (已修改) ---
 def load_data(traindir, valdir, args):
     print("Loading data")
     val_resize_size, val_crop_size, train_crop_size = args.val_resize_size, args.val_crop_size, args.train_crop_size
@@ -157,7 +152,6 @@ def load_data(traindir, valdir, args):
     ra_magnitude = getattr(args, "ra_magnitude", None)
     augmix_severity = getattr(args, "augmix_severity", None)
 
-    # 替换原来的 ImageFolder
     dataset = ImageNet64NPZ(
         traindir,
         split='train',
@@ -202,7 +196,6 @@ def load_data(traindir, valdir, args):
     return dataset, dataset_test, train_sampler, test_sampler
 
 
-# --- 4. Main 函数 (已修改路径和类别逻辑) ---
 def main(args):
     if args.output_dir:
         utils.mkdir(args.output_dir)
@@ -216,13 +209,12 @@ def main(args):
     else:
         torch.backends.cudnn.benchmark = True
 
-    # 关键修改：直接指向包含 .npz 文件的文件夹
     train_dir = os.path.join(args.data_path, "npz")
     val_dir = os.path.join(args.data_path, "npz")
 
     dataset, dataset_test, train_sampler, test_sampler = load_data(train_dir, val_dir, args)
 
-    num_classes = 1000  # ImageNet64 固定 1000 类
+    num_classes = 1000  
     mixup_cutmix = get_mixup_cutmix(
         mixup_alpha=args.mixup_alpha, cutmix_alpha=args.cutmix_alpha, num_classes=num_classes, use_v2=args.use_v2
     )
@@ -246,7 +238,6 @@ def main(args):
     model = Masternet.MasterNet(num_classes=num_classes, plainnet_struct=best_arch, no_create=False, no_reslink=False)
     model.to(device)
 
-    # 优化器、调度器逻辑保持不变...
     if args.distributed and args.sync_bn:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
 
@@ -261,7 +252,6 @@ def main(args):
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
 
-    # 训练循环开始
     print("Start training")
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
@@ -290,26 +280,19 @@ def get_args_parser(add_help=True):
     parser.add_argument("--lr-warmup-epochs", default=0, type=int, help="the number of epochs to warmup")
     parser.add_argument("--print-freq", default=10, type=int, help="print frequency")
     parser.add_argument("--output-dir", default=".", type=str, help="path to save outputs")
-
-    # 补齐分布式核心参数
     parser.add_argument("--world-size", default=1, type=int, help="number of distributed processes")
     parser.add_argument("--dist-url", default="env://", type=str, help="url used to set up distributed training")
 
-    # 补齐你命令里用到的所有开关
     parser.add_argument("--amp", action="store_true", help="Use torch.cuda.amp for mixed precision training")
-    parser.add_argument("--model-ema", action="store_true", help="enable tracking EMA")  # 关键：补上这个
+    parser.add_argument("--model-ema", action="store_true", help="enable tracking EMA")  
     parser.add_argument("--sync-bn", action="store_true", help="Use sync batch norm")
     parser.add_argument("--distributed", action="store_true")
-
-    # 补齐尺寸相关参数
     parser.add_argument("--val-resize-size", default=64, type=int)
     parser.add_argument("--val-crop-size", default=64, type=int)
     parser.add_argument("--train-crop-size", default=64, type=int)
     parser.add_argument("--interpolation", default="bilinear", type=str)
     parser.add_argument("--backend", default="PIL", type=str.lower)
     parser.add_argument("--use-v2", action="store_true")
-
-    # 补齐 EMA 步长等细节（防止代码内部用到报错）
     parser.add_argument("--model-ema-steps", type=int, default=32)
     parser.add_argument("--model-ema-decay", type=float, default=0.99998)
     parser.add_argument("--lr-warmup-method", default="constant", type=str)
