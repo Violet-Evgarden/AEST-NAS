@@ -1,87 +1,324 @@
-# 🚀 AEST-NAS
-**Agentic Evolution Meets Semantic Tribunal: A Meta-Prompted Dual-Phase Framework for Neural Architecture Search**
+# AEST-NAS
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![arXiv](https://img.shields.io/badge/arXiv-Paper_Title-b31b1b.svg)](https://arxiv.org/abs/xxxx.xxxxx)
+**Agentic Evolution with Semantic Topology-Aware Reranking for Training-Free Neural Architecture Search**
 
-> This is the official PyTorch implementation of **AEST-NAS**. 
+AEST-NAS is a training-free evolutionary neural architecture search (NAS) framework that separates **proxy-guided numerical exploration** from **semantic topology-aware reranking**. Zero-cost scores provide the repeated fitness signal during search, while large language models (LLMs) are restricted to constrained mutation and a final structural audit of a small elite set.
 
-## 📖 Introduction
-While Zero-Cost (ZC) proxies exponentially accelerate Neural Architecture Search (NAS), they frequently exhibit severe mathematical biases, artificially elevating structurally pathological architectures (e.g., severe capacity deficits or degenerate connectivity). 
+> **Repository status:** This repository contains the current research code snapshot. Environment-specific paths and LLM settings still require local configuration, and the prompts, search traces, seeds, and controlled-experiment artifacts are being organized for a reproducibility release.
 
-**AEST-NAS** introduces a novel meta-prompted dual-phase framework to decouple search efficiency from proxy biases. By leveraging a **Meta-Prompt Synthesizer** to autonomously translate universal structural heuristics into space-specific directives, our framework enables an efficient **Agentic Evolution (Phase 1)** guided by black-box ZC metrics, seamlessly safeguarded by a **Semantic Tribunal (Phase 2)** that performs domain-aware semantic filtering.
+## Method at a glance
 
-## 🌟 Key Features
-- 🤖 **Meta-Prompt Synthesizer:** Autonomously translates well-established structural heuristics (e.g., Path Connectivity, Representational Density) into explicit, space-specific directives, eliminating the need for manual prompt engineering across different search spaces.
-- 🧬 **Phase 1 - Agentic Evolution:** An LLM-driven mutator agent that explores topologies using purely black-box fitness metrics. It utilizes a stateless, short-term duplicate-aware feedback mechanism to prevent context pollution and topological hallucinations.
-- ⚖️ **Phase 2 - Semantic Tribunal:** A strict structural adjudicator grounded in the **Semantic Structural Prior**. It evaluates the top-$K$ elite candidates to systematically filter out pathological outliers that exploit mathematical proxy formulations, selecting the most robust architecture for deployment.
-- ⚡ **Extreme Efficiency & Low Cost:** Discovers highly compact optimal architectures (e.g., 19.7% Top-1 error on ImageNet under 600M FLOPs) with an end-to-end search cost of only **0.2 GPU days** and an API expenditure ranging from **$0.34 to $0.97**.
+```text
+Dataset + search-space specification
+                |
+                v
+Search-space-conditioned directive compiler
+        |                           |
+        v                           v
+Mutation directive          Semantic-audit directive
+        |                           |
+        v                           |
+Phase 1: Agentic Evolution          |
+LLM mutation + zero-cost fitness    |
+        |                           |
+        v                           |
+Proxy-screened Top-K candidates ----+
+                |
+                v
+Phase 2: Semantic Tribunal
+                |
+                v
+Selected architecture
+```
 
-## 📊 Main Results
-AEST-NAS achieves state-of-the-art Pareto-optimal trade-offs between accuracy and search efficiency across multiple search spaces:
-- **NAS-Bench-201:** 94.29% Test Acc (CIFAR-10) | 73.32% Test Acc (CIFAR-100)
-- **DARTS Space:** 2.40% Error (CIFAR-10) | 16.88% Error (CIFAR-100)
-- **MobileNet Space (ImageNet):** 19.7% Top-1 Error (600M FLOPs constraint)
+The framework has three main components:
 
-## 🏛️ Architecture
-![AEST-NAS Architecture](docs/architecture.png)
-*(Note: System workflow detailing the Meta-Prompt Synthesizer and the Dual-Phase Search Loop)*
+1. **Search-space-conditioned directive compilation.** Dataset and search-space descriptions are converted into separate mutation and semantic-audit directives.
+2. **Bounded-context Agentic Evolution.** The LLM proposes constrained mutations using localized population information, while ZiCo or another zero-cost proxy supplies the numerical fitness signal.
+3. **Semantic topology-aware reranking.** The final elite set is compared using a shared capacity-flow-dead operation abstraction together with topology- and position-dependent structural criteria.
 
-## 📰 News & Updates
-- **[2026.05]** 📄 Paper submitted to Expert Systems with Applications (ESWA).
-- **[2026.04]** 🚀 Repository created. Search and training codes are progressively being open-sourced.
+The proxy score and semantic judgment are intentionally not combined into a single scalar objective. Phase 1 raises the quality ceiling of the returned candidate set; Phase 2 reduces the risk of selecting a misleading proxy maximum.
 
-## ⚙️ Installation
+## Experimental coverage
 
-**Step 1: Environment Setup**
-We recommend using Conda to create a clean virtual environment for AEST-NAS.
+AEST-NAS is evaluated on three architecture paradigms:
+
+- **NAS-Bench-201:** a tabular four-node cell space containing 15,625 architectures;
+- **DARTS:** a substantially larger cell-based search space;
+- **MobileNetV2-based macro search:** a sequential inverted-residual search space under FLOP constraints.
+
+### Main search results
+
+| Search space | Dataset / budget | AEST-NAS result | Reporting protocol |
+|---|---:|---:|---|
+| NAS-Bench-201 | CIFAR-10 | 94.29 +/- 0.07% test accuracy | Five runs |
+| NAS-Bench-201 | CIFAR-100 | 73.32 +/- 0.21% test accuracy | Five runs |
+| NAS-Bench-201 | ImageNet16-120 | 46.38 +/- 0.33% test accuracy | Five runs |
+| DARTS | CIFAR-10 | 2.40 +/- 0.14% test error | Five runs |
+| DARTS | CIFAR-100 | 16.88 +/- 0.09% test error | Five runs |
+| MobileNetV2 macro | 398.1M FLOPs | 21.4% ImageNet Top-1 error | Single-run case study |
+| MobileNetV2 macro | 548.3M FLOPs | 19.7% ImageNet Top-1 error | Single-run case study |
+
+These results are reported as evidence of competitive search performance across different architecture representations. They are not presented as a claim of uniform statistical superiority over every baseline.
+
+### Controlled Phase 1 comparison
+
+The Phase 1 experiment compares LLM-guided mutation (LLM-PM), parameter-matched random mutation (RandPM), and random search under equal evaluation budgets. `Best@10` is a post-hoc measure of candidate-pool quality; benchmark validation and test accuracy are not used during search.
+
+| Dataset | Mean Best@10 accuracy | Best observed | Gain over stronger equal-budget baseline |
+|---|---:|---:|---:|
+| CIFAR-10 | 94.22 +/- 0.27% | 94.37% | +0.24 points |
+| CIFAR-100 | 72.96 +/- 0.48% | 73.51% | +1.39 points |
+| ImageNet16-120 | 46.59 +/- 0.17% | 46.71% | +0.30 points |
+
+Each value is computed over five search seeds with a budget of 300 proxy evaluations per seed.
+
+### Controlled Phase 2 comparison
+
+Phase 2 is evaluated independently of Phase 1. For each dataset, five pools of 200 uniformly sampled, non-duplicate NAS-Bench-201 architectures are scored by ZiCo and reduced to proxy Top-10 sets. The Semantic Tribunal receives candidate identifiers and genotypes but not ZiCo scores or benchmark accuracies.
+
+| Dataset | Tribunal selected test accuracy | Regret@10 to pool oracle |
+|---|---:|---:|
+| CIFAR-10 | 93.76 +/- 0.24% | 0.01 +/- 0.01 points |
+| CIFAR-100 | 71.12 +/- 0.72% | 0.06 +/- 0.13 points |
+| ImageNet16-120 | 45.49 +/- 0.72% | 0.02 +/- 0.05 points |
+
+`Oracle@10` is used only as a post-hoc upper bound. These results concern small proxy-screened candidate sets and should not be interpreted as evidence that the Semantic Tribunal is an accuracy oracle.
+
+## Reference configuration used in the manuscript
+
+The tables below record the configuration used for the reported experiments. They should be treated as the reproduction target. Some defaults in the current public scripts reflect earlier development runs and therefore differ from the manuscript settings.
+
+### Search and selection settings
+
+| Item | NAS-Bench-201 | DARTS | MobileNetV2 macro |
+|---|---:|---:|---:|
+| Initial population | 50 | 50 | 50 |
+| Maximum population | 100 | 100 | 100 |
+| Default zero-cost proxy | ZiCo | ZiCo | ZiCo |
+| Candidates passed to Phase 2 (`K`) | 10 | 20 | 20 |
+| Typical completed search length | 100-300 iterations | 300-600 iterations | 891 iterations |
+| Independent runs | 5 | 5 | 1 case-study run |
+| Reported metric | Benchmark test accuracy | Trained test error | ImageNet Top-1 error |
+
+For the controlled Phase 1 ablation, every method receives **300 proxy evaluations per seed**, uses the same population limits, and is repeated with five independent seeds. For the controlled Phase 2 ablation, each of the 15 independent pools contains 200 uniformly sampled, non-duplicate NAS-Bench-201 architectures; ZiCo retains the Top-10 candidates before reranking.
+
+### LLM settings
+
+| Role | Model used in the manuscript | Temperature | Invocation pattern |
+|---|---|---:|---|
+| Directive compilation | Gemini 2.5 Pro | Provider default unless otherwise specified | Once per search-space/dataset configuration |
+| Phase 1 constrained mutation | DeepSeek-Chat | 1.0 | Once per completed search iteration |
+| Phase 2 semantic reranking | DeepSeek-R1 | 0.0 | Once for the final Top-K candidate set |
+
+Typical token usage was approximately 850-1,500 input tokens and 50-800 output tokens for a Phase 1 call, and 600-1,000 input tokens plus 1,000-1,500 output tokens for the single Phase 2 call. Provider model names, endpoints, and prices may change; record the exact provider-side model identifier and access date in any reproduction report.
+
+> **Important implementation note:** `Agentic_NAS201.py` currently defaults to `deepseek-chat` with temperatures 0.6 and 0.2 for its two calls, and its Phase 2 model field must be configured locally. These development defaults are not the exact manuscript configuration above. Update the model identifiers, temperatures, and prompt paths before attempting an exact reproduction.
+
+### Final evaluation protocols
+
+#### DARTS architectures
+
+| Parameter | Value |
+|---|---:|
+| Initial channels | 36 |
+| Layers | 20 |
+| Training epochs | 600 |
+| Batch size | 96 |
+| Optimizer | SGD |
+| Initial learning rate | 0.025 |
+| Momentum | 0.9 |
+| Weight decay | `3e-4` |
+| Cutout length | 16 |
+| Gradient clipping | 5 |
+| Path dropout probability | 0.2 |
+| Auxiliary-tower weight | 0.4 |
+
+#### MobileNetV2 macro architectures on ImageNet
+
+| Parameter | Value |
+|---|---:|
+| Training epochs | 250 |
+| Total batch size | 1,024 |
+| Optimizer | SGD with Nesterov momentum |
+| Momentum | 0.9 |
+| Weight decay | `4e-5` |
+| Initial learning rate | 0.4 |
+| Learning-rate schedule | Cosine decay |
+| Data augmentation | Random resized crop and horizontal flip |
+| Label smoothing | 0.1 |
+| Nominal search budgets | 450M and 600M FLOPs |
+
+## Installation
+
+### 1. Clone the repository
 
 ```bash
-# Clone the repository
-git clone [https://github.com/Violet-Evgarden/AEST-NAS.git](https://github.com/Violet-Evgarden/AEST-NAS.git)
+git clone https://github.com/Violet-Evgarden/AEST-NAS.git
 cd AEST-NAS
+```
 
-# Create and activate a conda environment
+### 2. Create an environment
+
+```bash
 conda create -n aest-nas python=3.9
 conda activate aest-nas
-```
-
-**Step 2: Install Basic Dependencies**
-Install the standard scientific and auxiliary libraries required for the project:
-
-```bash
 pip install -r requirements.txt
+pip install python-dotenv
 ```
 
-**Step 3: Install PyTorch**
-Please install PyTorch, TorchVision, and TorchAudio according to your specific hardware configuration. 
-*Note: Our experiments were conducted using **PyTorch 2.5.1** with **CUDA 12.1**. You can install this specific version using the following command:*
+`python-dotenv` is required by `evolution_search.py` but is not yet listed in the snapshot's `requirements.txt`.
+
+### 3. Install PyTorch
+
+Install the build appropriate for your CUDA environment. The reported experiments used PyTorch 2.5.1 with CUDA 12.1:
 
 ```bash
-pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 --index-url [https://download.pytorch.org/whl/cu121](https://download.pytorch.org/whl/cu121)
+pip install torch==2.5.1 torchvision==0.20.1 torchaudio==2.5.1 \
+  --index-url https://download.pytorch.org/whl/cu121
 ```
-For other CUDA versions or CPU-only installations, please refer to the [PyTorch Official Website](https://pytorch.org/get-started/locally/).
 
-**Step 4: Install Architecture Search APIs (NAS-Bench-201)**
-To properly load the NAS-Bench-201 search space and evaluate the network architectures, you need to install the official API along with its foundational toolkit `xautodl`. Please install them directly from their source repositories:
+See the [official PyTorch installation selector](https://pytorch.org/get-started/locally/) for other CUDA versions or CPU-only environments.
+
+### 4. Install NAS-Bench-201 support
 
 ```bash
-pip install git+[https://github.com/D-X-Y/NAS-Bench-201.git](https://github.com/D-X-Y/NAS-Bench-201.git)
-pip install git+[https://github.com/D-X-Y/xautodl.git](https://github.com/D-X-Y/xautodl.git)
+pip install git+https://github.com/D-X-Y/NAS-Bench-201.git
+pip install git+https://github.com/D-X-Y/xautodl.git
 ```
 
-## 📁 Repository Structure & Usage Notes
+Download `NAS-Bench-201-v1_1-096897.pth` from the official NAS-Bench-201 release and place it in the repository root, or update the API path in the relevant scripts.
 
-Below is a brief overview of the key scripts and directories in this repository:
+## Configuration before running
 
-- **`Agentic_NAS201.py`**: The core script for running our proposed dual-phase search experiments on the NAS-Bench-201 space across three datasets. The methodology can be naturally extended to the DARTS space by replacing the architecture representation format accordingly.
-- **`evolution_search.py`**: Implements the architecture search within the MobileNet macro-search space. Note that this script only performs the search phase. To obtain the true accuracy of the discovered architectures, please use the corresponding training scripts (e.g., `train_*.py`) to train them from scratch.
-- **`evolution_201.py`**: An early-stage exploratory script not directly related to the final AEST-NAS framework proposed in our paper. It attempts to eliminate proxy biases purely through mathematical and human-empirical heuristics. Although the outcomes were sub-optimal, we retain it here for its potential reference value to the community.
-- **`test_proxy_batch.py`**: Scripts dedicated to ablation studies and retrospective evaluations of our searched architectures.
-- **`prompt/`**: A directory containing our generated prompt templates. Researchers can directly utilize these templates or flexibly adapt them to work with other preferred LLM APIs.
-- **Other files**: The remaining files are mostly standard foundational components and utilities for Neural Architecture Search (NAS).
+The public code is a research snapshot and retains several environment-specific settings. Review these items before starting a search:
 
-### 📌 Important Notices
-- **Environment & Paths:** Please ensure that all local paths for datasets, API keys, and pre-trained models are correctly updated to match your local environment before execution.
-- **Downloads:** Required datasets and benchmark databases (e.g., the NAS-Bench-201 `.pth` file) are not included in this repository. Please download them from their respective official websites.
-- **Code Readability:** The codebase retains certain legacy comments and internal debugging blocks intended for our team's retrospective checks. These do not affect the main execution logic and can be safely ignored.
+1. Set the LLM API key through an environment variable; do not place a real key in source code:
+
+   ```bash
+   # Linux / macOS
+   export DEEPSEEK_API_KEY="your-key"
+
+   # Windows PowerShell
+   $env:DEEPSEEK_API_KEY="your-key"
+   ```
+
+2. Update the NAS-Bench-201 `.pth` path where necessary.
+3. Update the prompt-file paths in `Agentic_NAS201.py` and `evolution_search.py` to point to your local prompt templates.
+4. Set the intended model identifier and endpoint for each LLM call.
+5. Check dataset paths, output directories, GPU indices, and FLOP constraints for your environment.
+
+The current snapshot does not yet contain the paper's final prompt templates. Provide local templates that match the expected input/output format, or wait for the planned reproducibility release before claiming exact reproduction. No API keys, benchmark databases, or private datasets are included in this repository.
+
+## Example: NAS-Bench-201 search
+
+After completing the configuration above, a NAS-Bench-201 search can be started with:
+
+```bash
+python Agentic_NAS201.py \
+  --gpu 0 \
+  --dataset cifar100 \
+  --evolution_max_iter 300 \
+  --population_size 100 \
+  --save_dir ./output/cifar100
+```
+
+Available dataset values in the current script are `cifar10-valid`, `cifar100`, and `ImageNet16-120`.
+
+## Command-line reference
+
+### `Agentic_NAS201.py`
+
+This is the main NAS-Bench-201 search entry point in the current snapshot.
+
+| Argument | Type / choices | Script default | Meaning |
+|---|---|---:|---|
+| `--gpu` | integer | `0` | CUDA device index used for zero-cost scoring |
+| `--dataset` | `cifar10-valid`, `cifar100`, `ImageNet16-120` | `cifar100` | NAS-Bench-201 dataset split |
+| `--evolution_max_iter` | integer | `500` | Maximum number of evolutionary iterations |
+| `--batch_size` | integer | `32` | Batch size used to estimate the zero-cost proxy |
+| `--population_size` | integer | `100` | Population capacity maintained by the search |
+| `--save_dir` | path | `./output` | Directory for search outputs |
+
+The script maps `cifar10-valid`, `cifar100`, and `ImageNet16-120` to 10, 100, and 120 classes, respectively. It expects the NAS-Bench-201 API file and uses CUDA for ZiCo evaluation.
+
+### `evolution_search.py`
+
+This entry point targets the MobileNetV2-based macro search space.
+
+| Argument | Type | Script default | Meaning |
+|---|---|---:|---|
+| `--gpu` | integer | `0` | CUDA device index |
+| `--zero_shot_score` | string | `Zen` | Zero-cost fitness name; the manuscript configuration uses ZiCo |
+| `--search_space` | path | `SearchSpace/search_space_IDW_fixfc.py` | Search-space definition |
+| `--evolution_max_iter` | integer | `1000` | Maximum evolutionary iterations |
+| `--budget_model_size` | float / none | `None` | Optional model-size constraint |
+| `--budget_flops` | float / none | `None` | Optional FLOP constraint |
+| `--budget_latency` | float / none | `None` | Optional latency constraint |
+| `--max_layers` | integer / none | `None` | Optional maximum network depth |
+| `--batch_size` | integer | `32` | Proxy-evaluation batch size |
+| `--input_image_size` | integer | `32` | Input resolution used by the script |
+| `--population_size` | integer | `512` | Population capacity |
+| `--save_dir` | path | `./output` | Output directory |
+| `--gamma` | float | `1e-2` | Search-space scaling/control parameter |
+| `--num_classes` | integer | `10` | Number of output classes |
+
+The macro-search script retains development defaults and must be aligned with the intended dataset, FLOP budget, proxy, and image resolution before reproduction. In particular, do not use the default `input_image_size=32` for an ImageNet final evaluation.
+
+### `test_proxy_batch.py`
+
+This utility scores a manually supplied NAS-Bench-201 architecture list and retrieves its tabular benchmark performance.
+
+| Argument | Choices | Script default |
+|---|---|---:|
+| `--gpu` | CUDA device index | `2` |
+| `--proxy` | `SCS`, `ISR`, `ZES`, `Zen`, `ZiCo`, `TE-NAS`, `Syncflow`, `GradNorm`, `NASWOT` | `Syncflow` |
+| `--dataset` | `cifar10`, `cifar100`, `ImageNet16-120` | `cifar10` |
+
+The `candidate_archs` list in the current file is intentionally empty. Populate it with valid NAS-Bench-201 genotypes before running the utility. Benchmark accuracy is retrieved only for analysis and is not fed back into AEST-NAS search or reranking.
+
+## Repository structure
+
+```text
+AEST-NAS/
+├── Agentic_NAS201.py              # NAS-Bench-201 agentic search entry point
+├── evolution_search.py            # MobileNetV2-based macro search
+├── test_proxy_batch.py            # Batch proxy and benchmark lookup utility
+├── train_image_classification.py  # Image classification training entry point
+├── ZeroShotProxy/                 # Zero-cost proxy implementations
+├── SearchSpace/                   # Macro search-space definitions
+├── DataLoader/                    # Dataset loading utilities
+├── ModelLoader/                   # Model construction and loading utilities
+├── PlainNet/                      # PlainNet representation and operators
+├── descriptions/                  # Search-space and proxy descriptions
+├── mobile/                        # Mobile training utilities
+└── requirements.txt
+```
+
+Additional files such as `evolution_201.py` are retained exploratory or legacy utilities and are not the primary entry points for the revised AEST-NAS workflow.
+
+## Reproducibility checklist
+
+The planned reproducibility package will include:
+
+- prompt templates and model/configuration metadata;
+- NAS-Bench-201 architecture genotypes and candidate identifiers;
+- random seeds and independent candidate pools;
+- per-architecture proxy scores and benchmark lookups;
+- Phase 1 search traces and returned Top-10 sets;
+- anonymized Phase 2 inputs, raw Tribunal outputs, and final selections;
+- scripts used to aggregate the reported mean and sample standard deviation.
+
+Until these materials are uploaded, users should treat this repository as a code snapshot rather than a complete artifact reproduction package.
+
+## API and compute cost
+
+Across the evaluated configurations, the observed end-to-end API expenditure was approximately **US$0.34-US$0.97 per search task**. The value depends on provider pricing, model selection, prompt length, network latency, and the number of completed iterations. Reported GPU-day values should also be interpreted as approximate because hardware and accounting protocols differ across studies.
+
+## Citation
+
+The revised manuscript is currently being prepared for submission. A complete BibTeX entry will be added after a public paper record becomes available. In the meantime, please cite this repository by URL and include the commit hash used in your experiments.
+
+## Contact
+
+For questions about the code or experiments, please open a GitHub issue or contact the corresponding author listed in the manuscript.
