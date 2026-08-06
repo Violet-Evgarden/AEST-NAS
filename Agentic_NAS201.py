@@ -1,24 +1,23 @@
 import os
 import sys
-import argparse, time
+import argparse
+import random
+import re
+from pathlib import Path
+
 import torch
 import numpy as np
-import secrets
-import logging
-import json
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-import global_utils
 import torch.nn as nn
 
-rng = secrets.SystemRandom()
-
-# NAS-Bench-201 API and model acquisition
-from nas_201_api import NASBench201API as API
-from xautodl.models import get_cell_based_tiny_net
-from ZeroShotProxy import compute_zico_score
-
-
+from reproducibility import (
+    DEFAULT_PROXY_BASE_SEED,
+    proxy_rng_seed,
+    search_rng_seed,
+    seed_everything,
+    write_json,
+)
 class NAS201Wrapper(nn.Module):
     def __init__(self, model):
         super().__init__()
@@ -31,36 +30,66 @@ class NAS201Wrapper(nn.Module):
         return out
 
 
-nas201_api = API('NAS-Bench-201-v1_1-096897.pth')
-
-
-def get_random_nas201_arch():
+def get_random_nas201_arch(rng):
     OPS = ['none', 'skip_connect', 'nor_conv_1x1', 'nor_conv_3x3', 'avg_pool_3x3']
-    return f"|{secrets.choice(OPS)}~0|+|{secrets.choice(OPS)}~0|{secrets.choice(OPS)}~1|+|{secrets.choice(OPS)}~0|{secrets.choice(OPS)}~1|{secrets.choice(OPS)}~2|"
+    return f"|{rng.choice(OPS)}~0|+|{rng.choice(OPS)}~0|{rng.choice(OPS)}~1|+|{rng.choice(OPS)}~0|{rng.choice(OPS)}~1|{rng.choice(OPS)}~2|"
 
 
+def get_unseen_random_nas201_arch(rng, visited):
+    for _ in range(10000):
+        arch = get_random_nas201_arch(rng)
+        if arch not in visited:
+            return arch
+    raise RuntimeError("Unable to sample an unseen NAS-Bench-201 architecture.")
 def parse_cmd_options(argv):
     parser = argparse.ArgumentParser()
     parser.add_argument('--gpu', type=int, default=0)
     parser.add_argument('--dataset', type=str, default='cifar100',
-                        choices=['cifar10-valid', 'cifar100', 'ImageNet16-120'])
-    parser.add_argument('--evolution_max_iter', type=int, default=500)
+                        choices=['cifar10', 'cifar10-valid', 'cifar100', 'ImageNet16-120'])
+    parser.add_argument('--api_path', type=str, default='./NAS-Bench-201-v1_1-096897.pth')
+    parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--proxy_base_seed', type=int, default=DEFAULT_PROXY_BASE_SEED)
+    parser.add_argument('--evolution_max_iter', type=int, default=300)
+    parser.add_argument('--initial_random', type=int, default=51)
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--population_size', type=int, default=100)
+    parser.add_argument('--top_k', type=int, default=10)
+    parser.add_argument('--patience_start', type=int, default=200)
+    parser.add_argument('--patience', type=int, default=50)
+    parser.add_argument('--phase1_prompt_path', type=str, default='./prompt/prompt.txt')
+    parser.add_argument('--phase2_prompt_path', type=str, default='./prompt_tribunal.txt')
+    parser.add_argument('--phase1_model', type=str, default='deepseek-chat')
+    parser.add_argument('--phase2_model', type=str, default='deepseek-reasoner')
+    parser.add_argument('--phase1_temperature', type=float, default=1.0)
+    parser.add_argument('--phase2_temperature', type=float, default=0.0)
+    parser.add_argument('--phase1_max_tokens', type=int, default=500)
+    parser.add_argument('--phase2_max_tokens', type=int, default=1500)
+    parser.add_argument('--llm_retries', type=int, default=3)
+    parser.add_argument('--llm_timeout', type=float, default=120.0)
     parser.add_argument('--save_dir', type=str, default='./output')
-    args, _ = parser.parse_known_args(argv)
+    args = parser.parse_args(argv)
 
-    if args.dataset == 'cifar10-valid':
+    if args.dataset in {'cifar10', 'cifar10-valid'}:
         args.num_classes, args.input_image_size = 10, 32
+        args.dataset_key, args.api_dataset = 'cifar10', 'cifar10-valid'
     elif args.dataset == 'cifar100':
         args.num_classes, args.input_image_size = 100, 32
+        args.dataset_key = args.api_dataset = 'cifar100'
     elif args.dataset == 'ImageNet16-120':
         args.num_classes, args.input_image_size = 120, 16
+        args.dataset_key = args.api_dataset = 'ImageNet16-120'
+
+    if args.initial_random <= 0:
+        parser.error('--initial_random must be positive')
+    if args.population_size < args.initial_random:
+        parser.error('--population_size must be at least --initial_random')
+    if args.top_k <= 0 or args.top_k > args.population_size:
+        parser.error('--top_k must be in [1, population_size]')
 
     return args
-
-
 def compute_proxy_score(the_model, gpu, proxy_name, args):
+    from ZeroShotProxy import compute_zico_score
+
     the_model = the_model.cuda(gpu)
     try:
         if proxy_name == 'ZiCo':
@@ -78,11 +107,10 @@ def compute_proxy_score(the_model, gpu, proxy_name, args):
 
 
 # LLM Invocation Module (Evolutionary Mutation + Final Tribunal)
-def generate_by_llm(structure_str, score, num_replaces, failed_attempts=None):
+def generate_by_llm(args, structure_str, score, num_replaces, failed_attempts=None):
     if failed_attempts is None: failed_attempts = []
-    file_path = "/data/XuZiJie/rznas/prompt/prompt.txt"
     from openai import OpenAI
-    with open(file_path, 'r', encoding='utf-8') as file:
+    with open(args.phase1_prompt_path, 'r', encoding='utf-8') as file:
         prompt = file.read()
 
     prompt = prompt.replace("{{architecture}}", structure_str)
@@ -93,33 +121,84 @@ def generate_by_llm(structure_str, score, num_replaces, failed_attempts=None):
         prompt += "\n\n=== SYSTEM FEEDBACK ===\nDO NOT GENERATE THESE EXACT DUPLICATES AGAIN:\n" + "\n".join(
             failed_attempts)
 
-    client = OpenAI(api_key=os.getenv("DEEPSEEK_API_KEY", ""),
-                    base_url="https://api.deepseek.com")
-    response = client.chat.completions.create(model="deepseek-chat", messages=[{"role": "user", "content": prompt}],
-                                              temperature=0.6, max_tokens=500)
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+    if not api_key:
+        raise RuntimeError("DEEPSEEK_API_KEY is not set.")
+    client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com", timeout=args.llm_timeout)
+    response = client.chat.completions.create(
+        model=args.phase1_model,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=args.phase1_temperature,
+        max_tokens=args.phase1_max_tokens,
+    )
     return response.choices[0].message.content
 
 
-def semantic_tribunal_by_llm(candidates_json_str, dataset_name):
-    file_path = "prompt_tribunal.txt"
+def semantic_tribunal_by_llm(args, candidates_json_str, dataset_name):
     from openai import OpenAI
-    with open(file_path, 'r', encoding='utf-8') as file:
+    with open(args.phase2_prompt_path, 'r', encoding='utf-8') as file:
         prompt = file.read()
 
     prompt = prompt.replace("{{dataset_name}}", dataset_name)
     prompt = prompt.replace("{{candidates_data}}", candidates_json_str)
 
-    print(f"\n[LLM Semantic Tribunal] Reviewing top 10 elite topologies for {dataset_name}...")
-    client = OpenAI(api_key=os.getenv("DEEPSEEK_API_KEY", ""),
-                    base_url="https://api.deepseek.com")
-    response = client.chat.completions.create(model="", messages=[{"role": "user", "content": prompt}],
-                                              temperature=0.2, max_tokens=600)
+    print(f"\n[LLM Semantic Tribunal] Reviewing {args.top_k} elite topologies for {dataset_name}...")
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+    if not api_key:
+        raise RuntimeError("DEEPSEEK_API_KEY is not set.")
+    client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com", timeout=args.llm_timeout)
+    response = client.chat.completions.create(
+        model=args.phase2_model,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=args.phase2_temperature,
+        max_tokens=args.phase2_max_tokens,
+    )
     return response.choices[0].message.content
-
-# Core Main Loop (Phase 1: ZiCo Evolution -> Phase 2: LLM Pure Topological Tribunal)
+# Core main loop: Phase 1 proxy-guided evolution, then Phase 2 reranking.
 def main(args):
+    from nas_201_api import NASBench201API as API
+    from xautodl.models import get_cell_based_tiny_net
+
     gpu = args.gpu
     torch.cuda.set_device(f'cuda:{gpu}')
+
+    api_path = Path(args.api_path).resolve()
+    if not api_path.is_file():
+        raise FileNotFoundError(f"NAS-Bench-201 API file not found: {api_path}")
+    nas201_api = API(str(api_path))
+
+    run_rng_seed = search_rng_seed(args.dataset_key, args.seed)
+    rng = random.Random(run_rng_seed)
+    seed_everything(run_rng_seed)
+    output_dir = Path(args.save_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    write_json(
+        output_dir / 'run_config.json',
+        {
+            'dataset': args.dataset_key,
+            'api_dataset': args.api_dataset,
+            'reported_seed': args.seed,
+            'derived_search_rng_seed': run_rng_seed,
+            'proxy_base_seed': args.proxy_base_seed,
+            'evolution_max_iter': args.evolution_max_iter,
+            'initial_random': args.initial_random,
+            'population_size': args.population_size,
+            'batch_size': args.batch_size,
+            'top_k': args.top_k,
+            'patience_start': args.patience_start,
+            'patience': args.patience,
+            'phase1_model': args.phase1_model,
+            'phase1_temperature': args.phase1_temperature,
+            'phase2_model': args.phase2_model,
+            'phase2_temperature': args.phase2_temperature,
+            'candidate_order': 'descending zero-cost proxy score',
+            'phase2_withheld_fields': [
+                'numerical proxy score',
+                'validation accuracy',
+                'test accuracy',
+            ],
+        },
+    )
 
     popu_structure_list = []
     popu_zico_score_list = []
@@ -140,8 +219,8 @@ def main(args):
 
         current_pool_size = len(popu_structure_list)
 
-        if current_pool_size <= 50:
-            random_structure_str = get_random_nas201_arch()
+        if current_pool_size < args.initial_random:
+            random_structure_str = get_unseen_random_nas201_arch(rng, global_arch_history)
             is_valid_new_arch = True
         else:
             tmp_idx = rng.randint(0, current_pool_size - 1)
@@ -153,10 +232,14 @@ def main(args):
             current_failed_attempts = []
             current_num_replaces = 1
 
-            while retry_count < 3:
-                llm_raw_output = generate_by_llm(tmp_random_structure_str, tmp_score, current_num_replaces,
-                                                 failed_attempts=current_failed_attempts)
-                import re
+            while retry_count < args.llm_retries:
+                llm_raw_output = generate_by_llm(
+                    args,
+                    tmp_random_structure_str,
+                    tmp_score,
+                    current_num_replaces,
+                    failed_attempts=current_failed_attempts,
+                )
                 match = re.search(r'"arch"\s*:\s*"([^"]+)"', llm_raw_output)
                 if match:
                     parsed_arch = match.group(1).replace(" ", "").replace("\n", "").replace("\\", "")
@@ -170,12 +253,16 @@ def main(args):
                 retry_count += 1
 
             if not is_valid_new_arch:
-                random_structure_str = get_random_nas201_arch()
-
+                random_structure_str = get_unseen_random_nas201_arch(rng, global_arch_history)
         global_arch_history.add(random_structure_str)
 
         try:
-            cfg = nas201_api.get_net_config(nas201_api.query_index_by_arch(random_structure_str), args.dataset)
+            score_seed = proxy_rng_seed(args.proxy_base_seed, args.dataset_key, random_structure_str)
+            seed_everything(score_seed)
+            cfg = nas201_api.get_net_config(
+                nas201_api.query_index_by_arch(random_structure_str),
+                args.api_dataset,
+            )
             the_model = NAS201Wrapper(get_cell_based_tiny_net(cfg))
             the_zico_score = compute_proxy_score(the_model, gpu, 'ZiCo', args)
         except Exception:
@@ -185,67 +272,98 @@ def main(args):
         popu_zico_score_list.append(the_zico_score)
 
         # Stagnation monitoring mechanism
-        if current_pool_size > 50:
+        if current_pool_size >= args.initial_random:
             if the_zico_score > best_phase_score:
                 best_phase_score = the_zico_score
                 patience_counter = 0
             else:
-                # Accumulate patience only after 200 iterations
-                if loop_count >= 200:
+                # Accumulate patience only after the configured warm-up.
+                if loop_count >= args.patience_start:
                     patience_counter += 1
 
-        print(f"Iter: {loop_count:3d} | Proxy: ZiCo | Score: {the_zico_score:8.4f} | Patience: {patience_counter}/50")
+        print(
+            f"Iter: {loop_count:3d} | Proxy: ZiCo | Score: {the_zico_score:8.4f} "
+            f"| Patience: {patience_counter}/{args.patience}"
+        )
 
-        if patience_counter >= 50 and loop_count >= 200:
+        if patience_counter >= args.patience and loop_count >= args.patience_start:
             print("\n[Evolution Terminated] Early Stop triggered. ZiCo reached a bottleneck.")
             break
 
-    # Phase 2: Pure Topological Double-Blind Test via LLM
-    print("\nEntering Phase 2: LLM Pure Topological Intuition Test")
-
-    # 1. Extract Top 10 from Phase 1 (Keep only architectures, discard scores)
+    # Phase 2: identifier/genotype-only semantic reranking via LLM.
+    print("\nEntering Phase 2: semantic topology-aware reranking")
+    # Extract proxy Top-K. Scores are withheld from the Tribunal text, but the
+    # descending proxy order is preserved and recorded in the run metadata.
     combined_pool = list(zip(popu_structure_list, popu_zico_score_list))
     combined_pool.sort(key=lambda x: x[1], reverse=True)
-    top_10_archs = [x[0] for x in combined_pool[:10]]
+    top_k_archs = [x[0] for x in combined_pool[:args.top_k]]
 
-    # 2. Generate pure architecture list string
+    # Generate the identifier/genotype-only Tribunal input.
     candidates_str = ""
-    for i, arch in enumerate(top_10_archs):
+    for i, arch in enumerate(top_k_archs):
         candidates_str += f"{i}. {arch}\n"
 
-    print("Submitting Top 10 pure topologies to DeepSeek for physical reasoning...")
+    write_json(
+        output_dir / 'phase2_candidates.json',
+        {
+            'dataset': args.dataset_key,
+            'reported_seed': args.seed,
+            'candidate_order': 'descending zero-cost proxy score',
+            'scores_in_llm_input': False,
+            'accuracies_in_llm_input': False,
+            'candidates': [
+                {'candidate_id': i, 'genotype': arch}
+                for i, arch in enumerate(top_k_archs)
+            ],
+        },
+    )
+    print(f"Submitting {args.top_k} identifier/genotype candidates to DeepSeek...")
+    # Call the LLM judge.
+    llm_judgment_raw = semantic_tribunal_by_llm(args, candidates_str, args.dataset_key)
 
-    # 3. Call LLM Judge
-    llm_judgment_raw = semantic_tribunal_by_llm(candidates_str, args.dataset)
+    # Parse the selection. A malformed response aborts the run instead of
+    # silently defaulting to the highest-proxy candidate (ID 0).
+    match = re.search(r'"winner_id"\s*:\s*"?(\d+)"?', llm_judgment_raw)
+    if not match:
+        raise RuntimeError("LLM output does not contain a valid winner_id.")
+    best_id = int(match.group(1))
+    if not 0 <= best_id < len(top_k_archs):
+        raise RuntimeError(f"winner_id {best_id} is outside the candidate range.")
 
-    # 4. Parse results
-    import re
-    best_id = 0
-    try:
-        match = re.search(r'"winner_id"\s*:\s*(\d+)', llm_judgment_raw)
-        if match:
-            best_id = int(match.group(1))
-    except:
-        print("LLM output parsing failed, defaulting to ID 0.")
+    best_arch = top_k_archs[best_id]
 
-    best_arch = top_10_archs[best_id]
+    write_json(
+        output_dir / 'phase2_selection.json',
+        {
+            'dataset': args.dataset_key,
+            'reported_seed': args.seed,
+            'winner_id': best_id,
+            'winner_genotype': best_arch,
+            'raw_response': llm_judgment_raw,
+        },
+    )
 
     print("\nTribunal Judgment:")
     print(llm_judgment_raw)
 
     # Final Stage: True Accuracy Reveal
-    print(f"\nRevealing True Accuracy for Top 10 Elite Architectures ({args.dataset})")
+    print(f"\nPost-hoc accuracy lookup for {args.top_k} elite architectures ({args.dataset_key})")
 
-    for i, arch in enumerate(top_10_archs):
+    for i, arch in enumerate(top_k_archs):
         arch_index = nas201_api.query_index_by_arch(arch)
-        final_info = nas201_api.get_more_info(arch_index, args.dataset, hp='200', is_random=False)
+        final_info = nas201_api.get_more_info(
+            arch_index,
+            args.api_dataset,
+            hp='200',
+            is_random=False,
+        )
 
         # Extract Test Accuracy and Valid Accuracy respectively
         test_acc = final_info.get('test-accuracy', final_info.get('valtest-accuracy', 0.0))
         valid_acc = final_info.get('valid-accuracy', 0.0)
 
         # Mark the architecture selected by the LLM
-        mark = "[LLM SOTA]" if i == best_id else "  "
+        mark = "[SELECTED]" if i == best_id else "  "
 
         print(f"{mark:<10} ID: {i} | Valid: {valid_acc:>5.2f}% | Test: {test_acc:>5.2f}% | Arch: {arch}")
 
@@ -253,5 +371,5 @@ def main(args):
 
 
 if __name__ == '__main__':
-    args = parse_cmd_options(sys.argv)
+    args = parse_cmd_options(sys.argv[1:])
     main(args)
