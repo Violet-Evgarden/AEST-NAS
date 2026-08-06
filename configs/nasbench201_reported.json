@@ -1,0 +1,35 @@
+{
+  "scope": "reported NAS-Bench-201 controlled component configuration",
+  "search_seeds": [0, 1, 2, 3, 4],
+  "proxy_base_seed": 20260722,
+  "search_rng_derivation": "blake2b32('e2-search|{dataset}|{seed}')",
+  "proxy_rng_derivation": "blake2b32('e2-zico|{proxy_base_seed}|{dataset}|{genotype}')",
+  "initial_random_evaluations": 51,
+  "population_capacity": 100,
+  "zero_cost_batch_size": 32,
+  "phase1_main_budget": 300,
+  "phase1_additional_budgets": {
+    "random_search": 600,
+    "randpm": 600
+  },
+  "top_k": 10,
+  "phase1_llm": {
+    "model": "deepseek-chat",
+    "temperature": 1.0,
+    "max_tokens": 500,
+    "retries": 3,
+    "timeout_seconds": 120.0
+  },
+  "phase2_llm": {
+    "model_family": "DeepSeek-R1",
+    "provider_model_identifier": "deepseek-reasoner",
+    "temperature": 0.0,
+    "max_tokens": 1500
+  },
+  "phase2_input": {
+    "included": ["candidate identifier", "NAS-Bench-201 genotype"],
+    "withheld": ["numerical proxy score", "validation accuracy", "test accuracy"],
+    "candidate_order": "descending zero-cost proxy order; order is not randomized"
+  },
+  "aggregation": "mean and sample standard deviation across five runs (ddof=1)"
+}
