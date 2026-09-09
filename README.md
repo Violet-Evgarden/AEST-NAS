@@ -4,7 +4,7 @@
 
 AEST-NAS is a training-free evolutionary neural architecture search (NAS) framework that separates **proxy-guided numerical exploration** from **semantic topology-aware reranking**. Zero-cost scores provide the repeated fitness signal during search, while large language models (LLMs) are restricted to constrained mutation and a final structural audit of a small elite set.
 
-> **Repository status:** This is a deliberately trimmed public implementation. It includes the released search entry points, deterministic seed utilities, and the reported NAS-Bench-201 configuration, but excludes private development modules, raw provider transcripts, and the full internal experiment archive.
+> **Repository status (pre-publication release):** This repository accompanies a manuscript that is currently under editorial consideration and is intentionally a trimmed public snapshot rather than a byte-for-byte archive of the authors' full experimental environment. It contains the public AEST-NAS implementation, released search entry points, deterministic seed utilities, and representative configuration records. Some internal development scripts, complete historical experiment logs, raw LLM/provider responses, auxiliary reproduction materials, and portions of the internal experiment archive are not included at this stage. These materials are retained by the authors and are planned to be organized and released after publication. Experimental settings stated in the manuscript should be treated as authoritative for the reported results; configurable defaults in the public code may differ from settings used in particular reported runs.
 
 ## Method at a glance
 
@@ -75,7 +75,7 @@ Each value is computed over the fixed search seeds `0, 1, 2, 3, 4`, with a budge
 
 ### Controlled Phase 2 comparison
 
-Phase 2 is evaluated independently of Phase 1. For each dataset, five pools of 200 uniformly sampled, non-duplicate NAS-Bench-201 architectures are scored by ZiCo and reduced to proxy Top-10 sets. The Semantic Tribunal receives candidate identifiers and genotypes but not numerical proxy scores or benchmark accuracies. Candidate identifiers preserve descending proxy order, so the protocol is score-blind and accuracy-blind but not order-blind.
+Phase 2 is evaluated independently of Phase 1. For each dataset, five pools of 200 uniformly sampled, non-duplicate NAS-Bench-201 architectures are scored by ZiCo and reduced to proxy Top-10 sets. In the public implementation, the retained Top-10 set is deterministically shuffled and re-indexed before the Semantic Tribunal input is constructed. The Tribunal therefore receives candidate identifiers and genotypes, but not numerical proxy scores, benchmark accuracies, or the proxy-derived ranking order.
 
 | Dataset | Tribunal selected test accuracy | Regret@10 to pool oracle |
 |---|---:|---:|
@@ -85,9 +85,9 @@ Phase 2 is evaluated independently of Phase 1. For each dataset, five pools of 2
 
 `Oracle@10` is used only as a post-hoc upper bound. These results concern small proxy-screened candidate sets and should not be interpreted as evidence that the Semantic Tribunal is an accuracy oracle.
 
-## Reference configuration used in the manuscript
+## Configuration and reporting notes
 
-The tables below record the configuration used for the reported experiments. They should be treated as the reproduction target. Some defaults in the current public scripts reflect earlier development runs and therefore differ from the manuscript settings.
+The manuscript is the authoritative source for the exact settings used to produce the reported results. The table below summarizes the current public snapshot and commonly used reference settings. Because the repository is a configurable research implementation and a trimmed pre-publication release, software defaults should not be interpreted as proof that every reported run used the same value.
 
 ### Search and selection settings
 
@@ -101,7 +101,7 @@ The tables below record the configuration used for the reported experiments. The
 | Independent runs | 5 | 5 | 1 case-study run |
 | Reported metric | Benchmark test accuracy | Trained test error | ImageNet Top-1 error |
 
-For the controlled Phase 1 ablation, every method receives **300 proxy evaluations per seed**, uses the same population limits, and is repeated with five independent seeds. The NAS-Bench-201 initialization count is 51 because this matches the executed loop boundary. For the controlled Phase 2 ablation, each of the 15 independent pools contains 200 uniformly sampled, non-duplicate NAS-Bench-201 architectures; ZiCo retains the Top-10 candidates before reranking.
+For the controlled Phase 1 ablation, every method receives **300 proxy evaluations per seed**, uses the same population limits, and is repeated with five independent seeds. The current public NAS-Bench-201 entry point uses an initialization count of 51 by default for this controlled 300-evaluation setting; other manuscript experiments may use explicitly supplied values. For the controlled Phase 2 ablation, each of the 15 independent pools contains 200 uniformly sampled, non-duplicate NAS-Bench-201 architectures; ZiCo retains the Top-10 set before the candidates are shuffled, re-indexed, and passed to the reranker.
 
 ### LLM settings
 
@@ -113,7 +113,7 @@ For the controlled Phase 1 ablation, every method receives **300 proxy evaluatio
 
 Typical token usage was approximately 850-1,500 input tokens and 50-800 output tokens for a Phase 1 call, and 600-1,000 input tokens plus 1,000-1,500 output tokens for the single Phase 2 call. Provider model names, endpoints, and prices may change; record the exact provider-side model identifier and access date in any reproduction report.
 
-`Agentic_NAS201.py` exposes the seed, proxy base seed, model identifiers, temperatures, prompt paths, population settings, and stopping parameters on the command line. Its defaults now match the NAS-Bench-201 configuration above; provider-side model revisions should still be recorded for every new run.
+`Agentic_NAS201.py` exposes the seed, proxy base seed, model identifiers, temperatures, prompt paths, population settings, stopping mode, and selection settings on the command line. The public defaults are intended as usable released defaults and may differ from explicitly supplied settings used in particular manuscript experiments. Provider-side model revisions should still be recorded for every new run.
 
 ### Final evaluation protocols
 
@@ -189,6 +189,8 @@ pip install git+https://github.com/D-X-Y/xautodl.git
 
 Download `NAS-Bench-201-v1_1-096897.pth` from the official NAS-Bench-201 release and place it in the repository root, or update the API path in the relevant scripts.
 
+The public NAS-Bench-201 wrapper passes the classifier logits (rather than the pooled feature vector returned alongside them by `xautodl`) to zero-cost proxy evaluation and validates the classifier output dimension against the target dataset.
+
 ## Configuration before running
 
 The public code is a research snapshot and retains several environment-specific settings. Review these items before starting a search:
@@ -208,7 +210,7 @@ The public code is a research snapshot and retains several environment-specific 
 4. Confirm the intended provider model identifiers for each LLM call.
 5. Check dataset paths, output directories, GPU indices, and FLOP constraints for your environment.
 
-The trimmed public repository does not contain the paper's final prompt templates. Provide local templates that match the documented input/output fields, and record the exact prompt hash and provider model identifier for every new run. No API keys, benchmark databases, private datasets, or deleted development modules are included.
+The current pre-publication snapshot does not include the paper's final prompt templates or all auxiliary reproduction materials. These materials remain in the authors' internal experiment archive and are planned to be organized and released after publication. Until then, local templates can be supplied through the documented prompt paths for exploratory use. No API keys, benchmark databases, private datasets, or unreleased internal development modules are included in this snapshot.
 
 ## Example: NAS-Bench-201 search
 
@@ -246,16 +248,17 @@ This is the main NAS-Bench-201 search entry point in the current snapshot.
 | `--initial_random` | integer | `51` | Initial uniformly sampled evaluations |
 | `--batch_size` | integer | `32` | Batch size used to estimate the zero-cost proxy |
 | `--population_size` | integer | `100` | Population capacity maintained by the search |
-| `--top_k` | integer | `10` | Candidates sent to semantic reranking |
-| `--patience_start` | integer | `200` | Earliest iteration at which stagnation is counted |
-| `--patience` | integer | `50` | Non-improving evaluations before early termination |
+| `--top_k` | integer | `10` | Candidates retained by proxy screening before Phase-2 shuffling |
+| `--patience_mode` | `heuristic`, `fixed` | `heuristic` | Use the manuscript-style class/search-space heuristic or a fixed patience value |
+| `--patience_start` | integer | `200` | Warm-up iteration used only in fixed-patience mode |
+| `--patience` | integer | `50` | Fixed non-improvement limit used only in fixed-patience mode |
 | `--phase1_model` | string | `deepseek-chat` | Mutation model identifier |
 | `--phase2_model` | string | `deepseek-reasoner` | Semantic-reranking model identifier |
 | `--phase1_temperature` | float | `1.0` | Mutation sampling temperature |
 | `--phase2_temperature` | float | `0.0` | Reranking sampling temperature |
 | `--save_dir` | path | `./output` | Directory for search outputs |
 
-The script writes `run_config.json`, `phase2_candidates.json`, and `phase2_selection.json` for each run. A malformed Tribunal response now terminates the run instead of silently selecting candidate 0.
+The script writes `run_config.json`, `phase2_candidates.json`, and `phase2_selection.json` for each run. The Phase-2 audit file records the shuffle seed and post-hoc proxy rank for traceability, but those ranks are not included in the LLM input. A malformed Tribunal response terminates the run instead of silently selecting candidate 0.
 
 ### `evolution_search.py`
 
@@ -323,9 +326,9 @@ The trimmed public repository records:
 - architecture-specific, method- and order-independent zero-cost proxy seeding;
 - the reported NAS-Bench-201 population, budget, LLM, and aggregation settings;
 - per-run configuration, Phase-2 candidate lists, and raw selection output for newly executed searches;
-- the fact that Phase-2 candidate order preserves descending proxy rank.
+- deterministic Phase-2 shuffling and re-indexing after proxy Top-K selection, so proxy rank/order is not included in the Tribunal input.
 
-The full internal experiment archive, discarded development modules, API credentials, benchmark database, and raw historical provider transcripts are intentionally not included. This repository should therefore be cited as the released implementation and configuration record, not as a byte-for-byte archive of every development run.
+The current pre-publication release is not intended to be a byte-for-byte archive of the authors' full experimental environment. Internal development modules, complete historical experiment logs, raw historical LLM/provider transcripts, API credentials, benchmark databases, and portions of the internal experiment archive are intentionally not included in this snapshot. Additional reproduction materials are planned to be organized and released after publication. This repository should therefore be cited as the current public implementation and configuration record; the manuscript remains the authoritative source for settings used to produce the reported results.
 
 ## API and compute cost
 
@@ -333,7 +336,7 @@ Across the evaluated configurations, the observed end-to-end API expenditure was
 
 ## Citation
 
-The revised manuscript is currently being prepared for submission. A complete BibTeX entry will be added after a public paper record becomes available. In the meantime, please cite this repository by URL and include the commit hash used in your experiments.
+The manuscript is currently under editorial consideration. A complete BibTeX entry will be added after a public paper record becomes available. In the meantime, please cite this repository by URL and include the commit hash used in your experiments.
 
 ## Contact
 

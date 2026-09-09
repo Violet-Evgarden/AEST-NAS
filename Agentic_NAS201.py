@@ -3,6 +3,7 @@ import sys
 import argparse
 import random
 import re
+import math
 from pathlib import Path
 
 import torch
@@ -19,15 +20,31 @@ from reproducibility import (
     write_json,
 )
 class NAS201Wrapper(nn.Module):
-    def __init__(self, model):
+    """Expose NAS-Bench-201 classification logits to zero-cost proxies."""
+
+    def __init__(self, model, num_classes):
         super().__init__()
         self.model = model
+        self.num_classes = int(num_classes)
 
     def forward(self, x):
         out = self.model(x)
+
+        # xautodl's NAS-Bench-201 TinyNetwork returns (features, logits).
+        # The zero-cost proxy must operate on the classification logits.
         if isinstance(out, tuple):
-            return out[0]
-        return out
+            if len(out) < 2:
+                raise RuntimeError("Unexpected NAS-Bench-201 model output tuple.")
+            logits = out[1]
+        else:
+            logits = out
+
+        if logits.ndim != 2 or logits.shape[1] != self.num_classes:
+            raise RuntimeError(
+                f"Unexpected classifier output shape {tuple(logits.shape)}; "
+                f"expected [batch, {self.num_classes}]."
+            )
+        return logits
 
 
 def get_random_nas201_arch(rng):
@@ -54,8 +71,11 @@ def parse_cmd_options(argv):
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--population_size', type=int, default=100)
     parser.add_argument('--top_k', type=int, default=10)
-    parser.add_argument('--patience_start', type=int, default=200)
-    parser.add_argument('--patience', type=int, default=50)
+    parser.add_argument('--patience_mode', type=str, default='heuristic', choices=['heuristic', 'fixed'])
+    parser.add_argument('--patience_start', type=int, default=200,
+                        help='Warm-up iteration used only when --patience_mode=fixed.')
+    parser.add_argument('--patience', type=int, default=50,
+                        help='Fixed non-improvement limit used only when --patience_mode=fixed.')
     parser.add_argument('--phase1_prompt_path', type=str, default='./prompt/prompt.txt')
     parser.add_argument('--phase2_prompt_path', type=str, default='./prompt_tribunal.txt')
     parser.add_argument('--phase1_model', type=str, default='deepseek-chat')
@@ -98,7 +118,8 @@ def compute_proxy_score(the_model, gpu, proxy_name, args):
         else:
             score = 1e-4
         if np.isnan(score) or np.isinf(score): score = 1e-4
-    except Exception:
+    except Exception as exc:
+        print(f"[Proxy warning] ZiCo evaluation failed: {exc}")
         score = 1e-4
 
     del the_model
@@ -107,8 +128,9 @@ def compute_proxy_score(the_model, gpu, proxy_name, args):
 
 
 # LLM Invocation Module (Evolutionary Mutation + Final Tribunal)
-def generate_by_llm(args, structure_str, score, num_replaces, failed_attempts=None):
+def generate_by_llm(args, structure_str, score, num_replaces, failed_attempts=None, local_references=None):
     if failed_attempts is None: failed_attempts = []
+    if local_references is None: local_references = []
     from openai import OpenAI
     with open(args.phase1_prompt_path, 'r', encoding='utf-8') as file:
         prompt = file.read()
@@ -117,8 +139,14 @@ def generate_by_llm(args, structure_str, score, num_replaces, failed_attempts=No
     prompt = prompt.replace("{{score}}", str(score))
     prompt = prompt.replace('{{mutate_num}}', str(num_replaces))
 
+    # Keep Phase-1 context bounded: three refreshed population references at most.
+    if local_references:
+        prompt += "\n\n=== LOCAL POPULATION REFERENCES ===\n"
+        for ref_id, (ref_arch, ref_score) in enumerate(local_references):
+            prompt += f"Reference {ref_id}: score={ref_score}; architecture={ref_arch}\n"
+
     if len(failed_attempts) > 0:
-        prompt += "\n\n=== SYSTEM FEEDBACK ===\nDO NOT GENERATE THESE EXACT DUPLICATES AGAIN:\n" + "\n".join(
+        prompt += "\n\n=== SYSTEM FEEDBACK ===\nDO NOT GENERATE THESE REJECTED PROPOSALS AGAIN:\n" + "\n".join(
             failed_attempts)
 
     api_key = os.getenv("DEEPSEEK_API_KEY")
@@ -169,7 +197,16 @@ def main(args):
 
     run_rng_seed = search_rng_seed(args.dataset_key, args.seed)
     rng = random.Random(run_rng_seed)
+    phase2_shuffle_seed = run_rng_seed ^ 0x5EED201
     seed_everything(run_rng_seed)
+
+    # The manuscript's adaptive patience heuristic is supported directly.
+    # Fixed patience remains available for controlled/legacy runs.
+    if args.patience_mode == 'heuristic':
+        patience_limit = math.floor(35 + math.log10(15625) + 0.1 * args.num_classes)
+    else:
+        patience_limit = args.patience
+
     output_dir = Path(args.save_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     write_json(
@@ -185,13 +222,15 @@ def main(args):
             'population_size': args.population_size,
             'batch_size': args.batch_size,
             'top_k': args.top_k,
-            'patience_start': args.patience_start,
-            'patience': args.patience,
+            'patience_mode': args.patience_mode,
+            'patience_start': args.patience_start if args.patience_mode == 'fixed' else None,
+            'patience_limit': patience_limit,
+            'phase2_shuffle_seed': phase2_shuffle_seed,
             'phase1_model': args.phase1_model,
             'phase1_temperature': args.phase1_temperature,
             'phase2_model': args.phase2_model,
             'phase2_temperature': args.phase2_temperature,
-            'candidate_order': 'descending zero-cost proxy score',
+            'candidate_order': 'deterministically shuffled after proxy Top-K selection',
             'phase2_withheld_fields': [
                 'numerical proxy score',
                 'validation accuracy',
@@ -208,7 +247,7 @@ def main(args):
     print("Entering Phase 1: ZiCo gradient-driven evolution")
 
     patience_counter = 0
-    best_phase_score = -999999.0
+    best_phase_score = float('-inf')
 
     for loop_count in range(args.evolution_max_iter):
 
@@ -227,6 +266,15 @@ def main(args):
             tmp_random_structure_str = popu_structure_list[tmp_idx]
             tmp_score = popu_zico_score_list[tmp_idx]
 
+            # Three refreshed local population references, excluding the parent.
+            candidate_ref_indices = [i for i in range(current_pool_size) if i != tmp_idx]
+            ref_count = min(3, len(candidate_ref_indices))
+            ref_indices = rng.sample(candidate_ref_indices, ref_count) if ref_count else []
+            local_references = [
+                (popu_structure_list[i], popu_zico_score_list[i])
+                for i in ref_indices
+            ]
+
             retry_count = 0
             is_valid_new_arch = False
             current_failed_attempts = []
@@ -239,17 +287,26 @@ def main(args):
                     tmp_score,
                     current_num_replaces,
                     failed_attempts=current_failed_attempts,
+                    local_references=local_references,
                 )
-                match = re.search(r'"arch"\s*:\s*"([^"]+)"', llm_raw_output)
+                match = re.search(r'"(?:arch|architecture)"\s*:\s*"([^"]+)"', llm_raw_output)
                 if match:
                     parsed_arch = match.group(1).replace(" ", "").replace("\n", "").replace("\\", "")
-                    if parsed_arch not in global_arch_history:
+
+                    # Reject malformed/out-of-space proposals before proxy evaluation.
+                    try:
+                        parsed_idx = nas201_api.query_index_by_arch(parsed_arch)
+                        is_search_space_valid = parsed_idx is not None and parsed_idx >= 0
+                    except Exception:
+                        is_search_space_valid = False
+
+                    if is_search_space_valid and parsed_arch not in global_arch_history:
                         random_structure_str = parsed_arch
                         is_valid_new_arch = True
                         break
-                    else:
-                        current_failed_attempts.append(parsed_arch)
-                        current_num_replaces = min(3, current_num_replaces + 1)
+
+                    current_failed_attempts.append(parsed_arch)
+                    current_num_replaces = min(3, current_num_replaces + 1)
                 retry_count += 1
 
             if not is_valid_new_arch:
@@ -263,40 +320,64 @@ def main(args):
                 nas201_api.query_index_by_arch(random_structure_str),
                 args.api_dataset,
             )
-            the_model = NAS201Wrapper(get_cell_based_tiny_net(cfg))
+            the_model = NAS201Wrapper(get_cell_based_tiny_net(cfg), args.num_classes)
             the_zico_score = compute_proxy_score(the_model, gpu, 'ZiCo', args)
-        except Exception:
+        except Exception as exc:
+            print(f"[Search warning] Failed to score architecture {random_structure_str}: {exc}")
             the_zico_score = 1e-4
 
         popu_structure_list.append(random_structure_str)
         popu_zico_score_list.append(the_zico_score)
 
-        # Stagnation monitoring mechanism
-        if current_pool_size >= args.initial_random:
+        # Initialize the stagnation reference from the completed random population.
+        if len(popu_structure_list) == args.initial_random and best_phase_score == float('-inf'):
+            best_phase_score = max(popu_zico_score_list)
+            patience_counter = 0
+
+        # Stagnation monitoring for mutation/evolution steps.
+        elif current_pool_size >= args.initial_random:
             if the_zico_score > best_phase_score:
                 best_phase_score = the_zico_score
                 patience_counter = 0
             else:
-                # Accumulate patience only after the configured warm-up.
-                if loop_count >= args.patience_start:
+                should_count = (
+                    args.patience_mode == 'heuristic'
+                    or loop_count >= args.patience_start
+                )
+                if should_count:
                     patience_counter += 1
 
         print(
             f"Iter: {loop_count:3d} | Proxy: ZiCo | Score: {the_zico_score:8.4f} "
-            f"| Patience: {patience_counter}/{args.patience}"
+            f"| Patience: {patience_counter}/{patience_limit}"
         )
 
-        if patience_counter >= args.patience and loop_count >= args.patience_start:
+        should_stop = (
+            patience_counter >= patience_limit
+            and (
+                args.patience_mode == 'heuristic'
+                or loop_count >= args.patience_start
+            )
+        )
+        if should_stop:
             print("\n[Evolution Terminated] Early Stop triggered. ZiCo reached a bottleneck.")
             break
 
     # Phase 2: identifier/genotype-only semantic reranking via LLM.
     print("\nEntering Phase 2: semantic topology-aware reranking")
-    # Extract proxy Top-K. Scores are withheld from the Tribunal text, but the
-    # descending proxy order is preserved and recorded in the run metadata.
+
+    # Use the proxy only to form the Top-K set. Before the Tribunal call,
+    # deterministically shuffle and re-index candidates so neither score nor
+    # proxy-derived rank/order is exposed to the LLM.
     combined_pool = list(zip(popu_structure_list, popu_zico_score_list))
     combined_pool.sort(key=lambda x: x[1], reverse=True)
-    top_k_archs = [x[0] for x in combined_pool[:args.top_k]]
+    ranked_top_k = [
+        {'proxy_rank': rank, 'genotype': arch}
+        for rank, (arch, _score) in enumerate(combined_pool[:args.top_k])
+    ]
+    phase2_rng = random.Random(phase2_shuffle_seed)
+    phase2_rng.shuffle(ranked_top_k)
+    top_k_archs = [item['genotype'] for item in ranked_top_k]
 
     # Generate the identifier/genotype-only Tribunal input.
     candidates_str = ""
@@ -308,12 +389,19 @@ def main(args):
         {
             'dataset': args.dataset_key,
             'reported_seed': args.seed,
-            'candidate_order': 'descending zero-cost proxy score',
+            'candidate_order': 'deterministically shuffled after proxy Top-K selection',
+            'phase2_shuffle_seed': phase2_shuffle_seed,
             'scores_in_llm_input': False,
             'accuracies_in_llm_input': False,
+            'proxy_rank_in_llm_input': False,
             'candidates': [
-                {'candidate_id': i, 'genotype': arch}
-                for i, arch in enumerate(top_k_archs)
+                {
+                    'candidate_id': i,
+                    'genotype': item['genotype'],
+                    # Retained only in the local audit log; not included in candidates_str.
+                    'posthoc_proxy_rank': item['proxy_rank'],
+                }
+                for i, item in enumerate(ranked_top_k)
             ],
         },
     )
